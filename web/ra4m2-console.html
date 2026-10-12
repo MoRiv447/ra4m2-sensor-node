@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RA4M2 环境监测节点 · 网页控制台（蓝牙 + 云端）</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel-2: #1c2129;
+    --border: #2d333b; --text: #e6edf3; --muted: #8b949e;
+    --ble: #2dd4bf;  --mqtt: #60a5fa;
+    --accent-text: #0d1117;
+    --rx: #a5d6ff; --tx: #7ee787; --sys: #8b949e; --err: #ff7b72; --ok: #3fb950;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.6 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 20px; border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header .title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  header .title svg { width: 18px; height: 18px; color: var(--ble); }
+  header .sub { font-size: 12px; color: var(--muted); }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 3px 10px;
+  }
+  .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; }
+  .badge.on { color: var(--text); }
+  .badge.on .dot { box-shadow: 0 0 6px currentColor; }
+  #badgeBle.on { border-color: var(--ble); }
+  #badgeBle.on .dot { background: var(--ble); color: var(--ble); }
+  #badgeMqtt.on { border-color: var(--mqtt); }
+  #badgeMqtt.on .dot { background: var(--mqtt); color: var(--mqtt); }
+  .spacer { flex: 1; }
+
+  button {
+    font: inherit; font-size: 13px; cursor: pointer;
+    border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text);
+    padding: 6px 14px; transition: filter .15s;
+  }
+  button:hover { filter: brightness(1.2); }
+  button:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+  button.primary.ble  { background: var(--ble);  color: var(--accent-text); border-color: transparent; font-weight: 500; }
+  button.primary.mqtt { background: var(--mqtt); color: var(--accent-text); border-color: transparent; font-weight: 500; }
+  button.danger { border-color: #6e2a2a; color: var(--err); }
+  button.mini { padding: 3px 10px; font-size: 12px; }
+
+  main {
+    flex: 1; min-height: 0;
+    display: flex; flex-direction: column; gap: 12px;
+    padding: 14px 20px;
+  }
+
+  /* —— 最新一帧数据条 —— */
+  .strip {
+    display: flex; align-items: stretch; gap: 10px; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 10px 14px;
+  }
+  .strip .metric { flex: 1; min-width: 110px; }
+  .strip .metric .k { font-size: 12px; color: var(--muted); }
+  .strip .metric .v { font-size: 20px; font-weight: 600; font-family: ui-monospace, Consolas, monospace; }
+  .strip .metric .v span { font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 3px; }
+  .strip .src { display: flex; flex-direction: column; justify-content: center; align-items: flex-end; gap: 4px; min-width: 150px; }
+  .strip .src .who { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .strip .src .who .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; }
+  .strip .metric .v.flash { animation: flash .6s ease; }
+  @keyframes flash { 0% { color: var(--ok); } 100% { color: var(--text); } }
+  /* —— 离线/断电提醒（看门狗）—— */
+  .strip.alert { border-color: #f85149; box-shadow: 0 0 0 1px #f85149 inset; }
+  .strip.alert .who { color: #ff7b72; font-weight: 600; }
+  .strip .alert-item { display: none; align-items: center; gap: 8px; width: 100%;
+    font-size: 12.5px; color: #ff7b72; border-top: 1px dashed #6e2a2a; padding-top: 7px; }
+  .strip .alert-item.show { display: flex; }
+
+  /* —— 双面板 —— */
+  .cols { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 980px) { .cols { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  }
+  .panel.conn-ble  { border-color: var(--ble); }
+  .panel.conn-mqtt { border-color: var(--mqtt); }
+  .panel-header {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 9px 14px; border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .panel-header .name { font-weight: 600; display: flex; align-items: center; gap: 7px; }
+  .panel-header .name .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .panel-header .grow { flex: 1; }
+  .panel-header .stat { font-size: 12px; color: var(--muted); }
+  .panel-body {
+    flex: 1; min-height: 0; overflow-y: auto;
+    padding: 10px 14px;
+    font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; font-size: 13px;
+  }
+  .log-line { padding: 1.5px 0; word-break: break-all; white-space: pre-wrap; }
+  .log-line .t { color: #555e68; font-size: 11.5px; margin-right: 8px; user-select: none; }
+  .log-rx  { color: var(--rx); }
+  .log-tx  { color: var(--tx); }
+  .log-sys { color: var(--sys); }
+  .log-err { color: var(--err); }
+  .log-cloud { color: #9ecbff; }
+  .ble-log-cfg { padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); }
+  textarea {
+    width: 100%; resize: none; height: 64px;
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 12px; font: inherit;
+    font-family: ui-monospace, Consolas, monospace; font-size: 13px;
+  }
+  textarea:focus { outline: none; border-color: var(--ble); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .row .grow { flex: 1; }
+  input[type=text] {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 10px; font: inherit; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px;
+    min-width: 0;
+  }
+  input[type=text]:focus { outline: none; border-color: var(--mqtt); }
+  .cfg { padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--border); }
+  .cfg label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+  .cfg label input { flex: 1; }
+  .hint { font-size: 12px; color: var(--muted); }
+  footer {
+    padding: 8px 20px 14px; font-size: 12px; color: var(--muted);
+    display: flex; gap: 18px; flex-wrap: wrap;
+  }
+  .warnbar {
+    display: none; margin: 12px 20px 0; padding: 10px 14px;
+    border: 1px solid #6e5a2a; background: #241f14; color: #e3b341;
+    border-radius: 8px; font-size: 13px;
+  }
+  .warnbar.show { display: block; }
+</style>
+</head>
+<body>
+<header>
+  <div class="title">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+      <path d="M12 20v-8"/><path d="M12 12L7.5 7.5"/><path d="M12 12l4.5-4.5"/>
+      <circle cx="12" cy="20" r="1.3" fill="currentColor" stroke="none"/>
+      <circle cx="7" cy="7" r="1.6"/><circle cx="17" cy="7" r="1.6"/>
+    </svg>
+    RA4M2 环境监测节点 · 网页控制台
+  </div>
+  <span class="sub">双链路合一：蓝牙近场 + 云端订阅</span>
+  <span class="spacer"></span>
+  <span class="badge" id="badgeBle"><span class="dot"></span><span id="badgeBleText">蓝牙 · 未连接</span></span>
+  <span class="badge" id="badgeMqtt"><span class="dot"></span><span id="badgeMqttText">云端 · 未连接</span></span>
+</header>
+
+<div class="warnbar" id="warnbar">
+  当前浏览器不支持 Web Bluetooth —— <b>蓝牙半边不可用</b>（云端半边不受影响）。
+  请用桌面版 <b>Chrome / Edge</b> 打开本页（https、localhost 或本地文件方式均可）。
+</div>
+
+<main>
+  <!-- 最新一帧 -->
+  <section class="strip">
+    <div class="metric"><div class="k">照度（BH1750）</div><div class="v" id="m-lux">—<span>lx</span></div></div>
+    <div class="metric"><div class="k">光敏（LDR）</div><div class="v" id="m-ldr">—<span>lx</span></div></div>
+    <div class="metric"><div class="k">温度（DHT22）</div><div class="v" id="m-t">—<span>°C</span></div></div>
+    <div class="metric"><div class="k">湿度（DHT22）</div><div class="v" id="m-rh">—<span>%</span></div></div>
+    <div class="src">
+      <div class="who"><span class="dot" id="latestDot"></span><span id="latestSrc">等待数据…</span></div>
+      <div class="hint">两路都开时，显示最后到达的一帧</div>
+    </div>
+    <div class="alert-item" id="alertBar"><span>⚠</span><span id="alertText"></span></div>
+  </section>
+
+  <div class="cols">
+    <!-- 蓝牙 -->
+    <section class="panel" id="blePanel">
+      <div class="panel-header">
+        <span class="name"><span class="dot" style="background:var(--ble)"></span>蓝牙 · 近场（Web Bluetooth）</span>
+        <span class="grow"></span>
+        <span class="stat" id="bleStat">0 B</span>
+        <button class="mini" id="btnBleClear">清空</button>
+        <button class="primary ble" id="btnBleConnect">连接设备</button>
+        <button class="danger mini" id="btnBleDisconnect" disabled>断开</button>
+      </div>
+      <div class="panel-body" id="bleLog"></div>
+      <div class="ble-log-cfg">
+        <div class="row">
+          <button class="mini" data-quick="read">read</button>
+          <button class="mini" data-quick="ping">ping</button>
+          <span class="grow"></span>
+          <span class="hint">命令经蓝牙直发 MCU；末尾自动补换行</span>
+        </div>
+        <div class="row">
+          <textarea id="bleTx" placeholder="输入要发送的文本（如 read），Ctrl+Enter 发送"></textarea>
+        </div>
+        <div class="row">
+          <span class="grow"></span>
+          <button class="primary ble" id="btnBleSend" disabled>发送</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 云端 -->
+    <section class="panel" id="mqttPanel">
+      <div class="panel-header">
+        <span class="name"><span class="dot" style="background:var(--mqtt)"></span>云端 · MQTT（WebSocket）</span>
+        <span class="grow"></span>
+        <span class="stat" id="mqttStat">0 条</span>
+        <button class="mini" id="btnMqttClear">清空</button>
+        <button class="primary mqtt" id="btnMqttConnect">连接</button>
+        <button class="danger mini" id="btnMqttDisconnect" disabled>断开</button>
+      </div>
+      <div class="cfg">
+        <label>Broker
+          <input type="text" id="mqttBroker" value="wss://broker.emqx.io:8084/mqtt">
+        </label>
+        <label>主题
+          <input type="text" id="mqttTopic" value="notmes/ra4m2">
+        </label>
+        <div class="hint">公共 broker 免注册；节点经 DA16200 每 10s 向该主题发布一帧。</div>
+      </div>
+      <div class="panel-body" id="mqttLog"></div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <span id="ftBleDevice">蓝牙设备：—</span>
+  <span id="ftBleChars">特征：—</span>
+  <span>服务过滤器：866d3b04-e674-40dc-9c05-b7f91bec6e83</span>
+  <span>提示：连接蓝牙需在弹出的设备列表中选择 NOTMESBE</span>
+</footer>
+
+<script>
+/* ================================================================
+ * RA4M2 环境监测节点 · 网页控制台（集成版）
+ *  左：蓝牙近场（Web Bluetooth，直连 DA14531 透传服务）
+ *  右：云端（MQTT over WebSocket，订阅 broker.emqx.io 上的帧）
+ *  顶部：两路数据共用的"最新一帧"数据条
+ * ================================================================ */
+
+const $ = (id) => document.getElementById(id);
+const SERVICE_UUID = '866d3b04-e674-40dc-9c05-b7f91bec6e83';
+const DEFAULT_BROKER = 'wss://broker.emqx.io:8084/mqtt';
+const DEFAULT_TOPIC  = 'notmes/ra4m2';
+
+function ts() {
+  const d = new Date();
+  const p = (n, w = 2) => String(n).padStart(w, '0');
+  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) + '.' + p(d.getMilliseconds(), 3);
+}
+function addLog(box, cls, text) {
+  const div = document.createElement('div');
+  div.className = 'log-line log-' + cls;
+  const t = document.createElement('span');
+  t.className = 't'; t.textContent = ts();
+  div.appendChild(t);
+  div.appendChild(document.createTextNode(text));
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+  while (box.childNodes.length > 800) box.removeChild(box.firstChild);
+}
+function withTimeout(promise, ms, what) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(what + '超时（' + (ms / 1000) + ' 秒）')), ms);
+    promise.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); }
+    );
+  });
+}
+function errText(e) { return (e && e.message) ? e.message : String(e); }
+function shortUuid(u) {
+  u = u.replace('0x', '');
+  if (u.length <= 8) return '0x' + u.toUpperCase();
+  return u.slice(0, 8) + '…';
+}
+
+/* ---------------- 最新一帧 ---------------- */
+const mEl = { lux: $('m-lux'), ldr: $('m-ldr'), t: $('m-t'), rh: $('m-rh') };
+function grab(s, k) {
+  const m = new RegExp('(?:^|[;\\s,])' + k + '=(-?[\\d.]+)', 'i').exec(s);
+  return m ? m[1] : null;
+}
+function flash(el) {
+  el.classList.remove('flash');
+  void el.offsetWidth;
+  el.classList.add('flash');
+}
+function updateLatest(src, raw) {
+  const lux = grab(raw, 'lux'), ldr = grab(raw, 'ldr'), t = grab(raw, 'T'), rh = grab(raw, 'RH');
+  if (lux === null && ldr === null && t === null && rh === null) return;   /* 不是数据帧，忽略 */
+  if (lux !== null) { mEl.lux.firstChild.textContent = lux; flash(mEl.lux); }
+  if (ldr !== null) { mEl.ldr.firstChild.textContent = ldr; flash(mEl.ldr); }
+  if (t   !== null) { mEl.t.firstChild.textContent   = t;   flash(mEl.t);   }
+  if (rh  !== null) { mEl.rh.firstChild.textContent  = rh;  flash(mEl.rh);  }
+  const dot = $('latestDot');
+  dot.style.background = (src === '蓝牙') ? 'var(--ble)' : 'var(--mqtt)';
+  $('latestSrc').textContent = src + ' · ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
+}
+
+/* ================================================================
+ * 蓝牙半边（Web Bluetooth）
+ * ================================================================ */
+const bleLog = $('bleLog');
+const addBleRx  = (t) => { addLog(bleLog, 'rx', t);  updateLatest('蓝牙', t); };
+const addBleSys = (t) => addLog(bleLog, 'sys', t);
+const addBleErr = (t) => addLog(bleLog, 'err', t);
+
+let device = null, server = null, writeChar = null, notifyChar = null;
+let bleRxBytes = 0, bleTxBytes = 0, lineBuf = '', flushTimer = null, bleConnected = false;
+
+function setBleBadge(on, text) {
+  $('badgeBle').classList.toggle('on', on);
+  $('badgeBleText').textContent = '蓝牙 · ' + text;
+}
+function setBleUi(connected) {
+  bleConnected = connected;
+  $('blePanel').classList.toggle('conn-ble', connected);
+  $('btnBleConnect').disabled = connected;
+  $('btnBleDisconnect').disabled = !connected;
+  $('btnBleSend').disabled = !connected || !writeChar;
+}
+
+if (!navigator.bluetooth) $('warnbar').classList.add('show');
+
+$('btnBleConnect').addEventListener('click', async () => {
+  try {
+    addBleSys('正在请求蓝牙设备…（在弹出的列表中选择 NOTMESBE / notmesBE）');
+    device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [SERVICE_UUID],
+    });
+    device.addEventListener('gattserverdisconnected', onBleDisconnected);
+
+    addBleSys('正在建立 GATT 连接…');
+    server = await withTimeout(device.gatt.connect(), 20000, 'GATT 连接');
+    setBleBadge(true, '已连接'); setBleUi(true);
+    markConn('ble');
+    addBleSys('GATT 已连接，开始发现服务与特征…');
+    await discoverBle();
+
+    $('ftBleDevice').textContent = '蓝牙设备：' + (device.name || device.id);
+    addBleSys('就绪。传感器帧每 5s 到一帧；可用 read / ping 主动取数。');
+  } catch (e) {
+    addBleErr('连接失败或已取消：' + errText(e));
+    resetBle();
+  }
+});
+
+/* 服务发现：优先直连目标服务（最稳），失败再退回枚举所有服务 */
+async function discoverBle() {
+  let services = [];
+  addBleSys('步骤 1/3：打开目标服务 ' + shortUuid(SERVICE_UUID) + '…');
+  try {
+    const svc = await withTimeout(server.getPrimaryService(SERVICE_UUID), 12000, '打开目标服务');
+    services = [svc]; addBleSys('目标服务已打开。');
+  } catch (e) {
+    addBleErr('直连目标服务失败：' + errText(e));
+    addBleSys('步骤 1/3 备用路径：枚举所有可访问服务…');
+    try {
+      services = await withTimeout(server.getPrimaryServices(), 12000, '枚举服务');
+      addBleSys('枚举到 ' + services.length + ' 个服务。');
+    } catch (e2) {
+      addBleErr('枚举服务也失败：' + errText(e2));
+      addBleErr('浏览器侧服务发现无法完成。可尝试：换 Edge / 更新蓝牙驱动 / 用手机 Chrome 打开。');
+      return;
+    }
+  }
+
+  addBleSys('步骤 2/3：枚举特征…');
+  let charCount = 0;
+  for (const s of services) {
+    let chars = [];
+    try { chars = await withTimeout(s.getCharacteristics(), 12000, '枚举特征'); }
+    catch (e) { addBleErr('服务 ' + shortUuid(s.uuid) + ' 特征枚举失败：' + errText(e)); continue; }
+    for (const ch of chars) {
+      charCount++;
+      addLog(bleLog, 'sys', '服务 ' + shortUuid(s.uuid) + ' › 特征 ' + shortUuid(ch.uuid) + '  [' + propText(ch.properties) + ']');
+      if (!writeChar && (ch.properties.write || ch.properties.writeWithoutResponse)) writeChar = ch;
+      if (!notifyChar && (ch.properties.notify || ch.properties.indicate)) notifyChar = ch;
+    }
+  }
+  addBleSys('共发现 ' + charCount + ' 个特征。');
+
+  addBleSys('步骤 3/3：订阅与就绪检查…');
+  if (notifyChar) {
+    try {
+      await withTimeout(notifyChar.startNotifications(), 12000, '订阅通知');
+      notifyChar.addEventListener('characteristicvaluechanged', onBleNotify);
+      addBleSys('已订阅通知特征 ' + shortUuid(notifyChar.uuid) + '，等待数据…');
+    } catch (e) { addBleErr('订阅通知失败：' + errText(e)); }
+  } else { addBleErr('未找到可通知的特征，无法接收数据。'); }
+  if (writeChar) addBleSys('写特征 ' + shortUuid(writeChar.uuid) + ' 就绪。');
+  else addBleErr('未找到可写入的特征，无法发送数据。');
+
+  $('ftBleChars').textContent = '特征：' +
+    (writeChar ? 'W:' + shortUuid(writeChar.uuid) : 'W:—') + '  ' +
+    (notifyChar ? 'N:' + shortUuid(notifyChar.uuid) : 'N:—');
+  setBleUi(true);
+}
+
+$('btnBleDisconnect').addEventListener('click', () => {
+  if (device && device.gatt.connected) device.gatt.disconnect();
+});
+function onBleDisconnected() {
+  addBleSys('设备连接已断开。');
+  resetBle();
+}
+function resetBle() {
+  device = null; server = null; writeChar = null; notifyChar = null;
+  lineBuf = ''; clearTimeout(flushTimer);
+  setBleBadge(false, '未连接'); setBleUi(false);
+  markDisconn('ble');
+  $('ftBleDevice').textContent = '蓝牙设备：—';
+  $('ftBleChars').textContent = '特征：—';
+}
+
+function onBleNotify(e) {
+  const v = e.target.value;
+  markRx('ble');
+  bleRxBytes += v.byteLength;
+  $('bleStat').textContent = bleRxBytes + ' B';
+  lineBuf += new TextDecoder().decode(v);
+  let idx;
+  while ((idx = lineBuf.indexOf('\n')) >= 0) {
+    const line = lineBuf.slice(0, idx).replace(/\r$/, '');
+    lineBuf = lineBuf.slice(idx + 1);
+    if (line.length) addBleRx(line);
+  }
+  clearTimeout(flushTimer);
+  flushTimer = setTimeout(() => { if (lineBuf.length) { addBleRx(lineBuf); lineBuf = ''; } }, 500);
+}
+
+async function bleSend() {
+  let msg = $('bleTx').value;
+  if (!msg) return;
+  if (!writeChar) { addBleErr('发送取消：写特征尚未就绪。'); return; }
+  if (!/\n$/.test(msg)) msg += '\n';   /* MCU 按“行”解析命令，末尾没有换行时自动补一个 */
+  const data = new TextEncoder().encode(msg);
+  try {
+    const p = writeChar.properties;
+    if (p.writeWithoutResponse) await writeChar.writeValueWithoutResponse(data);
+    else await writeValueWithResponseSafe(data);
+    bleTxBytes += data.byteLength;
+    addLog(bleLog, 'tx', '» ' + msg.replace(/\n/g, '\\n'));
+  } catch (e) { addBleErr('发送失败：' + errText(e)); }
+}
+async function writeValueWithResponseSafe(data) { await writeChar.writeValueWithResponse(data); }
+$('btnBleSend').addEventListener('click', bleSend);
+$('bleTx').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); bleSend(); } });
+document.querySelectorAll('[data-quick]').forEach((b) => {
+  b.addEventListener('click', () => { $('bleTx').value = b.dataset.quick; $('bleTx').focus(); });
+});
+$('btnBleClear').addEventListener('click', () => { bleLog.innerHTML = ''; bleRxBytes = 0; $('bleStat').textContent = '0 B'; });
+
+function propText(p) {
+  const a = [];
+  if (p.read) a.push('read');
+  if (p.write) a.push('write');
+  if (p.writeWithoutResponse) a.push('write-nr');
+  if (p.notify) a.push('notify');
+  if (p.indicate) a.push('indicate');
+  return a.join(', ') || '—';
+}
+
+/* ================================================================
+ * 云端半边（MQTT over WebSocket）
+ * ================================================================ */
+const mqttLog = $('mqttLog');
+const addMqttRx  = (t) => addLog(mqttLog, 'cloud', t);
+const addMqttSys = (t) => addLog(mqttLog, 'sys', t);
+const addMqttErr = (t) => addLog(mqttLog, 'err', t);
+
+let mqttClient = null, mqttMsgs = 0;
+
+/* mqtt.js 多 CDN 回退加载（国内网络下总有一个能通） */
+const MQTT_CDNS = [
+  'https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.10.1/mqtt.min.js',
+  'https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js',
+  'https://cdn.bootcdn.net/ajax/libs/mqtt/5.10.1/mqtt.min.js',
+];
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('加载失败 ' + src));
+    document.head.appendChild(s);
+  });
+}
+async function ensureMqttLib() {
+  if (window.mqtt) return;
+  for (const u of MQTT_CDNS) {
+    try {
+      addMqttSys('正在加载 mqtt.js：' + u);
+      await loadScript(u);
+      if (window.mqtt) { addMqttSys('mqtt.js 加载完成。'); return; }
+    } catch (e) { addMqttSys('该源不可用，换下一个…'); }
+  }
+  throw new Error('mqtt.js 所有备用源都加载失败——请检查网络（或把 mqtt.min.js 放到本页同目录改本地引用）');
+}
+
+function setMqttBadge(on, text) {
+  $('badgeMqtt').classList.toggle('on', on);
+  $('badgeMqttText').textContent = '云端 · ' + text;
+}
+function setMqttUi(connected) {
+  $('mqttPanel').classList.toggle('conn-mqtt', connected);
+  $('btnMqttConnect').disabled = connected;
+  $('btnMqttDisconnect').disabled = !connected;
+}
+
+$('btnMqttConnect').addEventListener('click', async () => {
+  try {
+    setMqttBadge(true, '连接中…');
+    await ensureMqttLib();
+    const url = $('mqttBroker').value.trim() || DEFAULT_BROKER;
+    const topic = $('mqttTopic').value.trim() || DEFAULT_TOPIC;
+
+    if (mqttClient) { try { mqttClient.end(true); } catch (e) {} mqttClient = null; }
+    addMqttSys('连接到 ' + url + ' …');
+    mqttClient = mqtt.connect(url, {
+      clientId: 'ra4m2-web-' + Math.random().toString(16).slice(2, 10),
+      clean: true, connectTimeout: 8000, reconnectPeriod: 2500, keepalive: 30,
+    });
+
+    mqttClient.on('connect', () => {
+      setMqttBadge(true, '已连接'); setMqttUi(true);
+      markConn('mqtt');
+      addMqttSys('已连接，订阅 ' + topic + ' …');
+      mqttClient.subscribe(topic, { qos: 0 }, (err) => {
+        if (err) addMqttErr('订阅失败：' + errText(err));
+        else addMqttSys('订阅成功，等待云端帧…');
+      });
+    });
+    mqttClient.on('message', (t, payload) => {
+      const s = new TextDecoder().decode(payload);
+      markRx('mqtt');
+      mqttMsgs++;
+      $('mqttStat').textContent = mqttMsgs + ' 条';
+      addMqttRx('[' + t + '] ' + s);
+      updateLatest('云端', s);
+    });
+    mqttClient.on('reconnect', () => addMqttSys('重连中…'));
+    mqttClient.on('close', () => { addMqttSys('连接已关闭。'); setMqttUi(false); setMqttBadge(false, '未连接'); markDisconn('mqtt'); });
+    mqttClient.on('error', (e) => addMqttErr('错误：' + errText(e)));
+  } catch (e) {
+    addMqttErr('无法连接：' + errText(e));
+    setMqttBadge(false, '未连接'); setMqttUi(false);
+  }
+});
+
+$('btnMqttDisconnect').addEventListener('click', () => {
+  if (mqttClient) { addMqttSys('手动断开。'); try { mqttClient.end(true); } catch (e) {} mqttClient = null; }
+  setMqttBadge(false, '未连接'); setMqttUi(false);
+  markDisconn('mqtt');
+});
+$('btnMqttClear').addEventListener('click', () => { mqttLog.innerHTML = ''; mqttMsgs = 0; $('mqttStat').textContent = '0 条'; });
+
+/* ================================================================
+ * 心跳看门狗 —— 节点离线 / 断电提醒
+ *   任一路数据断流超过阈值 → 数据条标红 + 响铃 + 手机震动；
+ *   数据恢复自动解除。阈值按各路正常节奏留足余量：
+ *     蓝牙 5s 一帧 → 25s；云端 10s 一帧 → 35s。
+ *   演示：控制台里执行 __simulateOffline('ble' | 'mqtt') 可手动触发提醒。
+ * ================================================================ */
+const WATCH_MS = { ble: 25000, mqtt: 35000 };
+const watchLastRx = { ble: 0, mqtt: 0 };
+const watchConnAt = { ble: 0, mqtt: 0 };
+const watchAlive  = { ble: true, mqtt: true };
+const watchMsg    = { ble: '', mqtt: '' };
+const alertBar = $('alertBar'), alertText = $('alertText');
+
+function markConn(link) {
+  watchConnAt[link] = Date.now();
+  watchLastRx[link] = Date.now();
+  watchAlive[link] = true;
+  watchMsg[link] = '';
+  renderAlert();
+}
+function markRx(link) {
+  watchLastRx[link] = Date.now();
+  if (!watchAlive[link]) {
+    watchAlive[link] = true;
+    watchMsg[link] = '';
+    renderAlert();
+    (link === 'ble' ? addBleSys : addMqttSys)('数据已恢复。');
+  }
+}
+function markDisconn(link) {
+  watchConnAt[link] = 0;
+  watchAlive[link] = true;
+  watchMsg[link] = '';
+  renderAlert();
+}
+function renderAlert() {
+  const msgs = [watchMsg.ble, watchMsg.mqtt].filter(Boolean);
+  alertBar.classList.toggle('show', msgs.length > 0);
+  document.querySelector('.strip').classList.toggle('alert', msgs.length > 0);
+  if (msgs.length) {
+    alertText.textContent = msgs.join('；');
+    $('latestDot').style.background = '#f85149';
+    $('latestSrc').textContent = '⚠ 节点离线（看门狗）';
+  } else if ($('latestSrc').textContent.indexOf('⚠') === 0) {
+    $('latestSrc').textContent = '等待数据…';
+    $('latestDot').style.background = '#555';
+  }
+}
+function fireOfflineAlert(link) {
+  const name = (link === 'ble') ? '蓝牙' : '云端';
+  const last = watchLastRx[link] || watchConnAt[link];
+  const t = new Date(last).toLocaleTimeString('zh-CN', { hour12: false });
+  watchAlive[link] = false;
+  watchMsg[link] = (watchLastRx[link] > watchConnAt[link])
+    ? '⚠ ' + name + '数据中断 —— 节点可能已断电（最后帧 ' + t + '）'
+    : '⚠ ' + name + '已连接但未收到数据（检查节点供电）';
+  renderAlert();
+  (link === 'ble' ? addBleErr : addMqttErr)(watchMsg[link]);
+  try { if (navigator.vibrate) navigator.vibrate([180, 120, 180]); } catch (e) {}
+  try { beepAlert(); } catch (e) {}
+}
+let alertAudioCtx = null;
+function beepAlert() {
+  alertAudioCtx = alertAudioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  const o = alertAudioCtx.createOscillator(), g = alertAudioCtx.createGain();
+  o.type = 'sine'; o.frequency.value = 880;
+  g.gain.setValueAtTime(0.0001, alertAudioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.12, alertAudioCtx.currentTime + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, alertAudioCtx.currentTime + 0.5);
+  o.connect(g); g.connect(alertAudioCtx.destination);
+  o.start(); o.stop(alertAudioCtx.currentTime + 0.55);
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const link of ['ble', 'mqtt']) {
+    const connected = (link === 'ble') ? bleConnected : !!mqttClient;
+    if (!connected || !watchConnAt[link]) continue;
+    const baseline = Math.max(watchLastRx[link], watchConnAt[link]);
+    if ((now - watchConnAt[link] >= WATCH_MS[link]) && (now - baseline >= WATCH_MS[link]) && watchAlive[link]) {
+      fireOfflineAlert(link);
+    }
+  }
+}, 1000);
+/* 演示/测试辅助 */
+window.__simulateOffline = (link) => {
+  const l = (link === 'mqtt') ? 'mqtt' : 'ble';
+  const now = Date.now();
+  if (!watchConnAt[l]) watchConnAt[l] = now - 120000;        /* 按"早已连接"模拟 */
+  watchLastRx[l] = now - WATCH_MS[l] - 5000;                 /* 按"数据刚断"模拟 */
+  fireOfflineAlert(l);
+};
+window.__clearOffline = () => {
+  watchMsg.ble = ''; watchMsg.mqtt = '';
+  watchAlive.ble = true; watchAlive.mqtt = true;
+  renderAlert();
+};
+
+/* ---------------- 启动提示 ---------------- */
+addBleSys('准备就绪（v3：直连服务优先 + 分步日志）。点击「连接设备」开始。');
+addBleSys('看门狗已启用：蓝牙 25s / 云端 35s 无数据 → 标红 + 响铃/震动（可拔主供电演示"节点离线"）。');
+addBleSys('提示：必须由你手动在弹窗中选择设备（浏览器安全要求）。');
+addMqttSys('准备就绪。默认订阅公共 broker 的 notmes/ra4m2 —— 节点上电后每 10s 一帧。');
+addMqttSys('提示：如浏览器打开控制台报证书/网络错误，换 Chrome/Edge 或检查网络。');
+</script>
+</body>
+</html>
